@@ -5,15 +5,8 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-# =========================
-# RAILWAY VARIABLES
-# =========================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID", "0"))
@@ -21,17 +14,12 @@ API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
-# =========================
-# SETTINGS
-# =========================
-
 channel = None
 comment = None
 running = False
+selected_entity = None
+post_handler = None
 
-# =========================
-# TELEGRAM USER SESSION
-# =========================
 
 user_client = TelegramClient(
     StringSession(SESSION_STRING),
@@ -40,17 +28,9 @@ user_client = TelegramClient(
 )
 
 
-# =========================
-# OWNER CHECK
-# =========================
-
 def is_owner(update: Update):
     return update.effective_user and update.effective_user.id == OWNER_ID
 
-
-# =========================
-# /start
-# =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
@@ -65,10 +45,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/status"
     )
 
-
-# =========================
-# /setchannel
-# =========================
 
 async def setchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global channel
@@ -89,10 +65,6 @@ async def setchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# =========================
-# /setcomment
-# =========================
-
 async def setcomment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global comment
 
@@ -112,12 +84,29 @@ async def setcomment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# =========================
-# /startcomment
-# =========================
+async def new_post(event):
+    global running, comment, selected_entity
+
+    if not running or not comment or selected_entity is None:
+        return
+
+    try:
+        print(f"New post detected: {event.message.id}")
+
+        await user_client.send_message(
+            selected_entity,
+            comment,
+            comment_to=event.message.id
+        )
+
+        print(f"Comment posted on message {event.message.id}")
+
+    except Exception as e:
+        print(f"Comment error: {e}")
+
 
 async def startcomment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global running
+    global running, selected_entity, post_handler
 
     if not is_owner(update):
         return
@@ -135,9 +124,25 @@ async def startcomment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        entity = await user_client.get_entity(channel)
+        selected_entity = await user_client.get_entity(channel)
+
+        if post_handler is not None:
+            user_client.remove_event_handler(post_handler)
+            post_handler = None
+
+        post_handler = user_client.add_event_handler(
+            new_post,
+            events.NewMessage(chats=selected_entity)
+        )
 
         running = True
+
+        title = getattr(selected_entity, "title", channel)
+
+        print(
+            f"Monitoring channel: {title} "
+            f"(id={getattr(selected_entity, 'id', 'unknown')})"
+        )
 
         await update.message.reply_text(
             f"🟢 Auto-comment STARTED\n\n"
@@ -146,31 +151,33 @@ async def startcomment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     except Exception as e:
+        running = False
+        selected_entity = None
+        post_handler = None
+
         await update.message.reply_text(
             f"❌ Cannot access channel.\n\n{e}"
         )
 
 
-# =========================
-# /stopcomment
-# =========================
-
 async def stopcomment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global running
+    global running, post_handler, selected_entity
 
     if not is_owner(update):
         return
 
     running = False
 
+    if post_handler is not None:
+        user_client.remove_event_handler(post_handler)
+        post_handler = None
+
+    selected_entity = None
+
     await update.message.reply_text(
         "🔴 Auto-comment STOPPED"
     )
 
-
-# =========================
-# /status
-# =========================
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
@@ -184,47 +191,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# =========================
-# NEW CHANNEL POST
-# =========================
-
-@user_client.on(events.NewMessage())
-async def new_post(event):
-    global running
-
-    if not running:
-        return
-
-    if not channel or not comment:
-        return
-
-    try:
-        entity = await user_client.get_entity(channel)
-
-        if event.chat_id != entity.id:
-            return
-
-        # Comment only when Telegram allows the account
-        await user_client.send_message(
-            entity,
-            comment,
-            comment_to=event.message.id
-        )
-
-        print(
-            f"Comment posted on message {event.message.id}"
-        )
-
-    except Exception as e:
-        print(f"Comment error: {e}")
-
-
-# =========================
-# MAIN
-# =========================
-
 async def main():
-
     await user_client.start()
 
     print("Telegram user session connected")
